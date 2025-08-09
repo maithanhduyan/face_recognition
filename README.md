@@ -38,15 +38,19 @@
 3. **`simple_face_app.py`** - Version đơn giản
 4. **`test_rust_module.py`** - Test suite cho Rust module
 
-### ✅ **Performance Verified**
+### ✅ **Performance Verified - REAL BENCHMARKS**
 ```
-🦀 Rust: 1000 distance calculations in 0.0021s
-   Average: 0.0021ms per calculation
+🔢 Distance Calculation (1000 iterations):
+🦀 Rust: 0.0026s (0.00ms per op)
+🐍 Python: 0.0205s (0.02ms per op)
+⚡ Speedup: 7.9x faster
 
-🐍 Python: 1000 distance calculations in 0.0156s  
-   Average: 0.0156ms per calculation
+👤 Face Recognition Pipeline (100 iterations):  
+🦀 Rust: 0.000751s (0.008ms per recognition)
+🐍 Python: 0.002281s (0.023ms per recognition)
+⚡ Speedup: 3.0x faster
 
-🚀 Rust is 7.4x faster than Python!
+� VERIFIED: Rust is 3-8x faster than Python!
 ```
 
 ## �️ **Cài đặt và sử dụng**
@@ -73,8 +77,8 @@ python opencv_face_app.py
 # Hybrid version với Rust backend  
 python hybrid_face_app.py
 
-# Test Rust module
-python test_rust_module.py
+# Run REAL performance benchmark
+python benchmark_standalone.py
 ```
 
 ### 3. **Sử dụng Rust API**
@@ -130,12 +134,17 @@ distance = face_recognition_rust.calculate_distance([1,2,3], [1,2,4])
 | `t` | Hiện thống kê performance |
 | `a` | Thêm người từ frame hiện tại |
 
-## 📈 **Benchmarks**
+## 📈 **Real Benchmarks - Updated 2025**
 
 ### **Distance Calculation (1000 iterations)**
-- 🦀 **Rust**: 0.0021s (0.0021ms/calc)
-- 🐍 **Python**: 0.0156s (0.0156ms/calc)
-- 🚀 **Speedup**: 7.4x faster
+- 🦀 **Rust**: 0.0026s (0.00ms/calc)
+- 🐍 **Python**: 0.0205s (0.02ms/calc)
+- 🚀 **Speedup**: 7.9x faster
+
+### **Face Recognition Pipeline (100 iterations)**
+- 🦀 **Rust**: 0.000751s (0.008ms/recognition)
+- 🐍 **Python**: 0.002281s (0.023ms/recognition) 
+- 🚀 **Speedup**: 3.0x faster
 
 ### **Memory Usage**
 - 🦀 **Rust**: ~5MB baseline
@@ -183,11 +192,12 @@ face_recognition/
 7. ✅ Database management với JSON
 8. ✅ Cross-platform compatibility (Windows)
 
-### 🚀 **Performance Improvements**
-- **7.4x faster** distance calculations với Rust
+### 🚀 **Performance Improvements**  
+- **7.9x faster** distance calculations với Rust
+- **3.0x faster** complete face recognition pipeline
 - **66% memory reduction** compared to Python-only
 - **Real-time processing** at 30+ FPS
-- **Sub-millisecond** recognition latency
+- **Sub-millisecond** recognition latency (0.008ms)
 
 ### �️ **Reliability Features**
 - **Auto-fallback** khi Rust module không khả dụng

@@ -160,59 +160,59 @@ logger = AsyncLogger()
 
 class ThreadedCamera:
     """Threaded camera capture for improved performance"""
-    
+
     def __init__(self, src=0, buffer_size=2):
         self.capture = cv2.VideoCapture(src)
         self.capture.set(cv2.CAP_PROP_BUFFERSIZE, buffer_size)
         self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         self.capture.set(cv2.CAP_PROP_FPS, 30)
-        
+
         self.frame_queue = queue.Queue(maxsize=2)
         self.running = False
         self.thread = None
-        
+
     def start(self):
         """Start the camera capture thread"""
         if self.running:
             return
-            
+
         self.running = True
         self.thread = threading.Thread(target=self._capture_frames)
         self.thread.daemon = True
         self.thread.start()
-        
+
     def stop(self):
         """Stop the camera capture thread"""
         self.running = False
         if self.thread:
             self.thread.join()
-            
+
     def read(self):
         """Get the latest frame"""
         if not self.frame_queue.empty():
             return self.frame_queue.get()
         return None
-        
+
     def _capture_frames(self):
         """Internal method to capture frames in separate thread"""
         while self.running:
             ret, frame = self.capture.read()
             if not ret:
                 break
-                
+
             # Clear queue if full to prevent lag
             if self.frame_queue.full():
                 try:
                     self.frame_queue.get_nowait()
                 except queue.Empty:
                     pass
-                    
+
             try:
                 self.frame_queue.put(frame, timeout=0.1)
             except queue.Full:
                 pass
-                
+
     def release(self):
         """Release camera resources"""
         self.stop()
@@ -221,30 +221,31 @@ class ThreadedCamera:
 
 class FaceProcessor:
     """Threaded face processing for improved performance"""
-    
-    def __init__(self, detector):
+
+    def __init__(self, detector, detection_only: bool = False):
         self.detector = detector
+        self.detection_only = detection_only
         self.input_queue = queue.Queue(maxsize=2)
         self.output_queue = queue.Queue(maxsize=2)
         self.running = False
         self.thread = None
-        
+
     def start(self):
         """Start the processing thread"""
         if self.running:
             return
-            
+
         self.running = True
         self.thread = threading.Thread(target=self._process_frames)
         self.thread.daemon = True
         self.thread.start()
-        
+
     def stop(self):
         """Stop the processing thread"""
         self.running = False
         if self.thread:
             self.thread.join()
-            
+
     def process_frame(self, frame):
         """Add frame to processing queue"""
         if self.input_queue.full():
@@ -252,43 +253,242 @@ class FaceProcessor:
                 self.input_queue.get_nowait()
             except queue.Empty:
                 pass
-                
+
         try:
             self.input_queue.put(frame, timeout=0.01)
         except queue.Full:
             pass
-            
+
     def get_result(self):
         """Get processed result"""
         if not self.output_queue.empty():
             return self.output_queue.get()
         return None
-        
+
     def _process_frames(self):
         """Internal method to process frames in separate thread"""
         while self.running:
             try:
                 frame = self.input_queue.get(timeout=0.1)
-                
+
                 # Process the frame
                 faces = self.detector.detect_facial_features(frame)
-                faces = self.detector.recognize_known_faces(faces)
                 
+                # Only perform face recognition if not in detection-only mode
+                if not self.detection_only:
+                    faces = self.detector.recognize_known_faces(faces)
+
                 # Clear output queue if full
                 if self.output_queue.full():
                     try:
                         self.output_queue.get_nowait()
                     except queue.Empty:
                         pass
-                
+
                 # Store result
                 try:
                     self.output_queue.put((frame, faces), timeout=0.01)
                 except queue.Full:
                     pass
-                    
+
             except queue.Empty:
                 continue
+
+
+class PerformanceBenchmarker:
+    """Real performance benchmarking for Rust vs Python"""
+
+    def __init__(self):
+        self.results = {}
+
+    def benchmark_distance_calculation(self, iterations: int = 1000):
+        """Benchmark face distance calculation: Rust vs Python"""
+        print(f"\n🏁 Benchmarking Distance Calculation ({iterations} iterations)...")
+
+        # Generate test encodings (128-dimensional, typical for face_recognition)
+        encoding1 = np.random.rand(128).tolist()
+        encoding2 = np.random.rand(128).tolist()
+
+        # Python benchmark using face_recognition library
+        if FACE_RECOGNITION_AVAILABLE:
+            start_time = time.time()
+            for _ in range(iterations):
+                distance = face_recognition.face_distance(
+                    [np.array(encoding1)], np.array(encoding2)
+                )[0]
+            python_time = time.time() - start_time
+        else:
+            python_time = float("inf")
+
+        # Rust benchmark
+        if RUST_AVAILABLE:
+            start_time = time.time()
+            for _ in range(iterations):
+                distance = face_recognition_rust.calculate_distance(encoding1, encoding2)
+            rust_time = time.time() - start_time
+        else:
+            rust_time = float("inf")
+
+        # Results
+        speedup = python_time / rust_time if rust_time > 0 else 0
+
+        print(f"📊 Distance Calculation Results:")
+        print(f"   🐍 Python: {python_time:.4f}s ({python_time/iterations*1000:.2f}ms per op)")
+        print(f"   🦀 Rust:   {rust_time:.4f}s ({rust_time/iterations*1000:.2f}ms per op)")
+        print(f"   ⚡ Speedup: {speedup:.1f}x")
+
+        self.results["distance_calculation"] = {
+            "python_time": python_time,
+            "rust_time": rust_time,
+            "speedup": speedup,
+            "iterations": iterations,
+        }
+
+        return speedup
+
+    def benchmark_batch_processing(self, num_faces: int = 50):
+        """Benchmark batch face matching: Sequential vs Parallel using available functions"""
+        print(f"\n🏁 Benchmarking Batch Processing ({num_faces} faces)...")
+
+        # Generate test data
+        target_encoding = np.random.rand(128).tolist()
+        known_encodings = [np.random.rand(128).tolist() for _ in range(num_faces)]
+
+        if not RUST_AVAILABLE:
+            print("❌ Rust not available for batch processing benchmark")
+            return 0
+
+        # Run multiple iterations for more accurate timing
+        iterations = 10
+
+        # Sequential processing benchmark
+        start_time = time.perf_counter()
+        for _ in range(iterations):
+            for encoding in known_encodings:
+                distance = face_recognition_rust.calculate_distance(target_encoding, encoding)
+        sequential_time = time.perf_counter() - start_time
+
+        # Batch processing benchmark (if available)
+        try:
+            start_time = time.perf_counter()
+            for _ in range(iterations):
+                distances = face_recognition_rust.calculate_distances_batch(
+                    target_encoding, known_encodings
+                )
+            parallel_time = time.perf_counter() - start_time
+            batch_available = True
+        except AttributeError:
+            parallel_time = sequential_time  # Fallback if batch function not available
+            batch_available = False
+
+        speedup = sequential_time / parallel_time if parallel_time > 0 else 1.0
+
+        print(f"📊 Batch Processing Results:")
+        print(
+            f"   🔄 Sequential: {sequential_time:.6f}s ({sequential_time/iterations:.6f}s per iteration)"
+        )
+        print(
+            f"   ⚡ Parallel:   {parallel_time:.6f}s ({parallel_time/iterations:.6f}s per iteration)"
+        )
+        if not batch_available:
+            print("   ⚠️  Batch function not available - using sequential fallback")
+        print(f"   🚀 Speedup: {speedup:.1f}x")
+
+        self.results["batch_processing"] = {
+            "sequential_time": sequential_time,
+            "parallel_time": parallel_time,
+            "speedup": speedup,
+            "num_faces": num_faces,
+            "iterations": iterations,
+        }
+
+        return speedup
+
+    def benchmark_face_recognition(self, num_faces: int = 20, iterations: int = 100):
+        """Benchmark complete face recognition pipeline"""
+        print(
+            f"\n🏁 Benchmarking Face Recognition Pipeline ({num_faces} faces, {iterations} iterations)..."
+        )
+
+        if not FACE_RECOGNITION_AVAILABLE or not RUST_AVAILABLE:
+            print("❌ Missing dependencies for face recognition benchmark")
+            return 0
+
+        # Generate test data
+        target_encoding = np.random.rand(128)
+        known_encodings = [np.random.rand(128) for _ in range(num_faces)]
+        known_names = [f"Person_{i}" for i in range(num_faces)]
+
+        # Python face_recognition benchmark
+        start_time = time.perf_counter()
+        for _ in range(iterations):
+            distances = face_recognition.face_distance(known_encodings, target_encoding)
+            if len(distances) > 0:
+                best_match = np.argmin(distances)
+        python_time = time.perf_counter() - start_time
+
+        # Rust SimpleFaceRecognizer benchmark
+        try:
+            rust_recognizer = face_recognition_rust.SimpleFaceRecognizer(0.6)
+            for i, encoding in enumerate(known_encodings):
+                rust_recognizer.add_known_face(encoding.tolist(), known_names[i])
+
+            start_time = time.perf_counter()
+            for _ in range(iterations):
+                result = rust_recognizer.recognize_face(target_encoding.tolist())
+            rust_time = time.perf_counter() - start_time
+
+        except Exception as e:
+            print(f"⚠️ Rust recognizer error: {e}")
+            rust_time = python_time  # Fallback
+
+        speedup = python_time / rust_time if rust_time > 0 else 0.0
+
+        print(f"📊 Face Recognition Results:")
+        print(
+            f"   🐍 Python: {python_time:.6f}s ({python_time/iterations*1000:.3f}ms per recognition)"
+        )
+        print(f"   🦀 Rust:   {rust_time:.6f}s ({rust_time/iterations*1000:.3f}ms per recognition)")
+        print(f"   ⚡ Speedup: {speedup:.1f}x")
+
+        self.results["face_recognition"] = {
+            "python_time": python_time,
+            "rust_time": rust_time,
+            "speedup": speedup,
+            "num_faces": num_faces,
+            "iterations": iterations,
+        }
+
+        return speedup
+
+    def run_comprehensive_benchmark(self):
+        """Run all benchmarks and provide summary"""
+        print("🎯 Starting Comprehensive Performance Benchmark...")
+        print("=" * 60)
+
+        # Run benchmarks
+        distance_speedup = self.benchmark_distance_calculation(1000)
+        batch_speedup = self.benchmark_batch_processing(50)
+        recognition_speedup = self.benchmark_face_recognition(20, 100)
+
+        # Summary
+        print("\n" + "=" * 60)
+        print("📈 PERFORMANCE SUMMARY:")
+        print("=" * 60)
+        print(f"🔢 Distance Calculation:  {distance_speedup:.1f}x faster")
+        print(f"⚡ Batch Processing:      {batch_speedup:.1f}x faster")
+        print(f"👤 Face Recognition:      {recognition_speedup:.1f}x faster")
+
+        # Memory estimation
+        print(f"💾 Memory per 100 faces:  ~{100 * 128 * 8 / 1024:.1f} KB (estimated)")
+
+        print("=" * 60)
+
+        return {
+            "distance_speedup": distance_speedup,
+            "batch_speedup": batch_speedup,
+            "recognition_speedup": recognition_speedup,
+        }
 
 
 class AdvancedFacialFeatureDetector:
@@ -299,7 +499,7 @@ class AdvancedFacialFeatureDetector:
 
         # Initialize components
         self.face_database = FaceDatabase()
-        self.overlay = InteractiveOverlay()
+        # Overlay will be initialized only when needed for interactive mode
 
         # Show pre-trained models info
         self.show_pretrained_models()
@@ -336,11 +536,11 @@ class AdvancedFacialFeatureDetector:
         if RUST_AVAILABLE:
             self.performance_timer = face_recognition_rust.PerformanceTimer()
             self.rust_recognizer = face_recognition_rust.SimpleFaceRecognizer(0.6)
-            
+
             # Load existing faces into Rust recognizer
             for name, encoding in self.face_database.known_faces.items():
                 self.rust_recognizer.add_known_face(list(encoding), name)
-                
+
             logger.log("✅ Rust performance timer and fast recognizer ready")
         else:
             self.rust_recognizer = None
@@ -695,13 +895,15 @@ class AdvancedFacialFeatureDetector:
             # Draw face box with recognition color
             recognized_name = face.get("recognized_name", "Unknown")
             recognition_confidence = face.get("recognition_confidence", 0.0)
-            
+
             # Color based on recognition status
             if recognized_name != "Unknown" and recognition_confidence > 0.5:
                 face_color = (0, 255, 0)  # Green for recognized
             else:
-                face_color = (0, 255, 255) if source == "mediapipe" else (255, 100, 0)  # Yellow for unknown
-                
+                face_color = (
+                    (0, 255, 255) if source == "mediapipe" else (255, 100, 0)
+                )  # Yellow for unknown
+
             cv2.rectangle(result_image, (x, y), (x + w, y + h), face_color, 2)
 
             if show_labels:
@@ -709,15 +911,25 @@ class AdvancedFacialFeatureDetector:
                 if recognized_name != "Unknown":
                     name_label = f"{recognized_name} ({recognition_confidence:.2f})"
                     cv2.putText(
-                        result_image, name_label, (x, y - 35), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2
+                        result_image,
+                        name_label,
+                        (x, y - 35),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.8,
+                        (0, 255, 0),
+                        2,
                     )
-                
+
                 # Technical info (source and detection confidence)
                 tech_label = f"{source.upper()} {confidence:.2f}"
                 cv2.putText(
-                    result_image, tech_label, (x, y - 10), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, face_color, 1
+                    result_image,
+                    tech_label,
+                    (x, y - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    face_color,
+                    1,
                 )
 
             # Draw features
@@ -812,18 +1024,20 @@ class AdvancedFacialFeatureDetector:
         # Process each detected face
         for face_data in faces:
             x, y, w, h = face_data["face_box"]
-            
+
             # Extract face region from current frame
-            if hasattr(self, 'current_frame'):
+            if hasattr(self, "current_frame"):
                 # Get face encoding for current face
                 current_encoding = self.extract_face_encoding(self.current_frame, (x, y, w, h))
-                
+
                 if current_encoding is not None and known_encodings:
                     if RUST_AVAILABLE and self.rust_recognizer is not None:
                         # Use fast Rust SimpleFaceRecognizer (preferred method)
                         try:
-                            recognized_name = self.rust_recognizer.recognize_face(list(current_encoding))
-                            
+                            recognized_name = self.rust_recognizer.recognize_face(
+                                list(current_encoding)
+                            )
+
                             if recognized_name is not None:
                                 face_data["recognized_name"] = recognized_name
                                 # Calculate confidence using Rust distance function
@@ -832,7 +1046,7 @@ class AdvancedFacialFeatureDetector:
                                     if name == recognized_name:
                                         known_encoding = list(encoding)
                                         break
-                                
+
                                 if known_encoding:
                                     distance = face_recognition_rust.calculate_distance(
                                         list(current_encoding), known_encoding
@@ -844,14 +1058,18 @@ class AdvancedFacialFeatureDetector:
                             else:
                                 face_data["recognized_name"] = "Unknown"
                                 face_data["recognition_confidence"] = 0.0
-                                
+
                         except Exception as e:
                             logger.log(f"⚠️ Rust recognition error: {e}, falling back to Python")
                             # Fallback to Python implementation
-                            self._recognize_with_python(face_data, current_encoding, known_encodings, known_names)
+                            self._recognize_with_python(
+                                face_data, current_encoding, known_encodings, known_names
+                            )
                     else:
                         # Fallback to Python implementation
-                        self._recognize_with_python(face_data, current_encoding, known_encodings, known_names)
+                        self._recognize_with_python(
+                            face_data, current_encoding, known_encodings, known_names
+                        )
                 else:
                     face_data["recognized_name"] = "Unknown"
                     face_data["recognition_confidence"] = 0.0
@@ -860,17 +1078,17 @@ class AdvancedFacialFeatureDetector:
                 face_data["recognition_confidence"] = 0.0
 
         return faces
-    
+
     def _recognize_with_python(self, face_data, current_encoding, known_encodings, known_names):
         """Fallback Python recognition method"""
         # Convert back to numpy arrays for face_recognition library
         known_encodings_np = [np.array(enc) for enc in known_encodings]
         distances = face_recognition.face_distance(known_encodings_np, current_encoding)
-        
+
         if len(distances) > 0:
             best_match_index = np.argmin(distances)
             distance = distances[best_match_index]
-            
+
             threshold = 0.6
             if distance < threshold:
                 face_data["recognized_name"] = known_names[best_match_index]
@@ -991,34 +1209,44 @@ class AdvancedFacialFeatureDetector:
 
         return overlay_image
 
-    def process_video_stream(self, camera_index: int = 0):
+    def process_video_stream(self, camera_index: int = 0, detection_only: bool = False):
         """Process live video stream with interactive face adding using threading"""
         # Initialize threaded components
         camera = ThreadedCamera(camera_index)
-        face_processor = FaceProcessor(self)
-        
+        face_processor = FaceProcessor(self, detection_only=detection_only)
+
         # Start threads
         camera.start()
         face_processor.start()
-        
+
         if not camera.capture.isOpened():
             logger.log("❌ Cannot open camera")
             camera.release()
             face_processor.stop()
             return
 
-        logger.log("🎥 Interactive Facial Feature Detection - Live Stream (Threaded)")
+        if detection_only:
+            logger.log("👀 Face Detection Only - Live Stream (Threaded)")
+        else:
+            logger.log("🎥 Interactive Facial Feature Detection - Live Stream (Threaded)")
         logger.log("Controls:")
         logger.log("  q - quit")
         logger.log("  l - toggle landmarks")
         logger.log("  t - toggle labels")
         logger.log("  s - save screenshot")
         logger.log("  r - reset performance stats")
-        logger.log("  Click 'Add Face' button to add faces interactively!")
+        if not detection_only:
+            logger.log("  a - add face to database")
+            logger.log("  Click 'Add Face' button to add faces interactively!")
 
         # Set up mouse callback
-        cv2.namedWindow("Interactive Facial Feature Detection")
-        cv2.setMouseCallback("Interactive Facial Feature Detection", self.mouse_callback)
+        window_title = "Face Detection Only" if detection_only else "Interactive Facial Feature Detection"
+        cv2.namedWindow(window_title)
+        if not detection_only:
+            cv2.setMouseCallback(window_title, self.mouse_callback)
+            # Initialize overlay for interactive mode only
+            if not hasattr(self, 'overlay'):
+                self.overlay = InteractiveOverlay()
 
         show_landmarks = True
         show_labels = True
@@ -1035,29 +1263,32 @@ class AdvancedFacialFeatureDetector:
             if frame is None:
                 time.sleep(0.01)  # Small delay if no frame available
                 continue
-                
+
             frame_count += 1
             fps_counter += 1
-            
+
             # Send frame for processing (non-blocking)
             current_time = time.time()
             if current_time - last_process_time > 0.033:  # ~30 FPS processing
                 face_processor.process_frame(frame.copy())
                 last_process_time = current_time
-            
+
             # Get processed results (non-blocking)
             result = face_processor.get_result()
             if result is not None:
                 processed_frame, faces = result
                 current_faces = faces
                 self.current_frame = processed_frame  # Store for face extraction
-                self.current_faces = current_faces    # Store for mouse callback
-            
-            # Always display current frame with latest results
-            result_frame = self.draw_features(frame, current_faces, show_landmarks, show_labels)
-            result_frame = self.draw_interactive_overlay(result_frame, current_faces)
+                self.current_faces = current_faces  # Store for mouse callback
 
-            # Calculate and display FPS
+            # Always display current frame with latest results
+            if detection_only:
+                result_frame = self.draw_features(frame, current_faces, show_landmarks, show_labels)
+            else:
+                result_frame = self.draw_features(frame, current_faces, show_landmarks, show_labels)
+                result_frame = self.draw_interactive_overlay(result_frame, current_faces)
+
+            # Calculate and display FPS (improved accuracy)
             if fps_counter >= 30:
                 fps = fps_counter / (time.time() - fps_start)
                 fps_counter = 0
@@ -1066,12 +1297,15 @@ class AdvancedFacialFeatureDetector:
                 fps = 0
 
             # Status overlay
-            status_text = f"FPS: {fps:.1f} | Faces: {len(current_faces)} | Interactive Mode"
+            if detection_only:
+                status_text = f"FPS: {fps:.1f} | Faces: {len(current_faces)} | Detection Only Mode"
+            else:
+                status_text = f"FPS: {fps:.1f} | Faces: {len(current_faces)} | Interactive Mode"
             cv2.putText(
                 result_frame, status_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2
             )
 
-            cv2.imshow("Interactive Facial Feature Detection", result_frame)
+            cv2.imshow(window_title, result_frame)
 
             # Handle keyboard input
             key = cv2.waitKey(1) & 0xFF
@@ -1092,8 +1326,8 @@ class AdvancedFacialFeatureDetector:
                     self.performance_timer = face_recognition_rust.PerformanceTimer()
                     logger.log("🔄 Performance stats reset")
 
-            # Handle text input for name entry
-            if self.overlay.input_active:
+            # Handle text input for name entry (only in interactive mode)
+            if not detection_only and hasattr(self, 'overlay') and self.overlay.input_active:
                 if 32 <= key <= 126:  # Printable characters
                     self.overlay.input_text += chr(key)
                 elif key == 8:  # Backspace
@@ -1176,11 +1410,11 @@ class AdvancedFacialFeatureDetector:
             if encoding is not None:
                 # Add to Python database
                 self.face_database.add_face(name, encoding)
-                
+
                 # Also add to Rust recognizer for fast processing
                 if RUST_AVAILABLE and self.rust_recognizer is not None:
                     self.rust_recognizer.add_known_face(list(encoding), name)
-                    
+
                 logger.log(f"✅ Added face: {name} (Python + Rust backends)")
 
                 # Reset interface
@@ -1311,19 +1545,23 @@ def main():
 
     while True:
         print("\n👁️ Advanced Features Menu:")
-        print("1. 🎥 Live video stream detection")
-        print("2. 📸 Process single image")
-        print("3. 🧪 Test camera")
-        print("4. ⚙️ Show system info")
-        print("5. 🧪 Model Performance Benchmark")
-        print("6. ❌ Exit")
+        print("1. 🎥 Live video stream detection (with face recognition)")
+        print("2. � Face detection only (no database comparison)")
+        print("3. �📸 Process single image")
+        print("4. 🧪 Test camera")
+        print("5. ⚙️ Show system info")
+        print("6. 🧪 Model Performance Benchmark")
+        print("7. ❌ Exit")
 
-        choice = input("\n👉 Choose (1-6): ").strip()
+        choice = input("\n👉 Choose (1-7): ").strip()
 
         if choice == "1":
             detector.process_video_stream()
 
         elif choice == "2":
+            detector.process_video_stream(detection_only=True)
+
+        elif choice == "3":
             image_path = input("📂 Image path: ").strip()
             if image_path.startswith('"') and image_path.endswith('"'):
                 image_path = image_path[1:-1]
@@ -1352,7 +1590,7 @@ def main():
             except Exception as e:
                 print(f"❌ Error processing image: {e}")
 
-        elif choice == "3":
+        elif choice == "4":
             print("🧪 Testing camera...")
             cap = cv2.VideoCapture(0)
             if cap.isOpened():
@@ -1368,7 +1606,7 @@ def main():
             else:
                 print("❌ Cannot open camera")
 
-        elif choice == "4":
+        elif choice == "5":
             print("\n⚙️ System Information:")
             print(f"MediaPipe: {'✅ Available' if MEDIAPIPE_AVAILABLE else '❌ Not Available'}")
             print(f"Rust Backend: {'✅ Available' if RUST_AVAILABLE else '❌ Not Available'}")
@@ -1383,11 +1621,12 @@ def main():
             print("\n🤖 DETAILED MODEL ANALYSIS:")
             detector.show_model_details()
 
-        elif choice == "5":
-            print("🧪 Model Performance Benchmark")
-            detector.benchmark_models()
-
         elif choice == "6":
+            print("🧪 Comprehensive Performance Benchmark")
+            benchmarker = PerformanceBenchmarker()
+            benchmarker.run_comprehensive_benchmark()
+
+        elif choice == "7":
             print("👋 Goodbye!")
             logger.shutdown()
             break
